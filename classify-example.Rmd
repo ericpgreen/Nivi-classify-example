@@ -1,0 +1,299 @@
+---
+title: "Classify"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    #logo:                     # add the relative path/file.png
+    #favicon:                  # add the relative path/file.png
+    theme: bootstrap
+    #css: custom.css           # add the relative path/file.css
+    vertical_layout: fill
+runtime: shiny
+---
+
+```{r global, include=FALSE, message=FALSE}
+# setup
+# -----------------------------------------------------------------------------
+  library(flexdashboard)
+  library(shiny)
+  library(rdrop2)
+  library(tidyverse)
+  library(shinyWidgets)
+  library(DT)
+
+# authenticate with dropbox for remote storage
+# -----------------------------------------------------------------------------
+# is file storage remote (1) or local (0)
+  remote <- 0  
+
+# https://github.com/karthik/rdrop2
+# https://github.com/karthik/rdrop2/issues/61#issuecomment-423341288
+# run once:
+  # drop_auth()
+  # token <- drop_auth()
+  # saveRDS(token, file = "token.rds")   # updload to server with app
+  
+  if (remote==1) {
+    outputDir <- "dash"                    # output directory on Dropox (toplevel)
+    drop_auth(rdstoken = "droptoken.rds")  # give token
+  }
+  
+# construct helpers
+# ----------------------------------------------------------------------------- 
+# set reactive to delay eventReactives
+  set.seed(1)
+  rv <- reactiveValues()
+  rv$run2 <- 0
+  
+# input variables
+  vars <- c("rater", "classification", "other", "confidence", "language")
+```
+  
+```{r load, include=FALSE, message=FALSE}
+# master files
+# -----------------------------------------------------------------------------
+
+# load current masters
+  if (remote==1) { # load from dropbox
+    master <- reactiveValues(df = drop_read_csv("/dash/master.csv", 
+                                                stringsAsFactors = FALSE))
+    raters <- drop_read_csv("/dash/raters.csv", stringsAsFactors = FALSE)
+  
+  } else { # load from local repo
+    master <- reactiveValues(df = read.csv("dash/master.csv", 
+                                           stringsAsFactors = FALSE))
+    raters <- read.csv("dash/raters.csv", stringsAsFactors = FALSE)
+  }
+
+# get new master on submit
+  eventReactive(rv$run2, {
+    
+    if (remote==1) {
+      master$df <- drop_read_csv("/dash/master.csv", stringsAsFactors = FALSE)
+      
+    } else {
+      master$df <- read.csv("dash/master.csv", stringsAsFactors = FALSE)
+    }
+    
+  }, ignoreNULL = TRUE)
+  
+# processing
+# -----------------------------------------------------------------------------
+# check for items that have agreement between two raters  
+  done <- eventReactive(rv$run2, {
+  master$df %>%
+    group_by(id, classification) %>%
+    count() %>%
+    filter(n>1 & !(is.na(classification)))
+  }, ignoreNULL=FALSE)
+  
+# find items that the rater has not rated
+  rated <- eventReactive(rv$run2, {
+  master$df %>%
+    group_by(id, rater) %>%
+    filter(rater==input$rater)
+  }, ignoreNULL=FALSE)
+
+# select an item for the rater
+  class <- eventReactive(rv$run2, {
+  master$df %>%
+    filter(!(id %in% done()$id)) %>%
+    filter(!(id %in% rated()$id)) %>%
+    sample_n(1)
+  }, ignoreNULL=FALSE)
+```
+
+Task
+=====================================  
+
+Column {data-width=300}
+-----------------------------------------------------------------------
+
+```{r ui-rater}
+# define UI
+  conditionalPanel(
+    condition = "input.rater == ''",
+    mainPanel(br(),
+              br(),
+              pickerInput(inputId = "rater", 
+                          label = "Select your name", 
+                          choices = raters$name, 
+                          options = list(title = "Make a selection"), 
+                          multiple = FALSE)
+              )
+  )
+```
+
+Column {data-width=600}
+-----------------------------------------------------------------------
+Welcome! You will read SMS messages and classify the user's intent. In other words, you'll try to identify what the user wants based on the text message. The intents that populate the selection list are described on the "Definitions" panel. If you think the user is asking about something not included in the list, select 'Another option not in this list' and describe the user's intent in a few words in the space that will pop-up. If you read the message and have no clue what the user wants, just select 'Cannot make sense of text'. For every selection, you must also rate your confidence in your choice. When you hit the `submit` button, your selections will be captured and a new message will appear. Keep going as long as you want. If you hit the `submit` button and nothing happens, it's likely because you did not make a selection in all fields.
+
+```{r ui-ratings}
+# create object with SMS question
+  output$textq <- renderText(class()$question)
+
+# define inputs
+# -----------------------------------------------------------------------------
+  fillCol(height = 600, flex = c(NA, 1),
+  mainPanel(
+    br(),
+    br(),
+  # show SMS question
+    tags$style("#textq{font-size: 30px;
+                                }"
+                         ),
+    conditionalPanel(
+      condition = "input.rater != ''",
+      textOutput("textq")
+    ),
+    br(),
+    br()
+  ),
+  conditionalPanel(
+      condition = "input.rater != ''",
+      wellPanel(
+      # classification input
+        pickerInput(inputId = "classification", 
+                    label = "Select the best classification", 
+                    choices = c("intent 1", 
+                                "intent 2", 
+                                "intent 3", 
+                                "intent 4", 
+                                "Another option not in this list",
+                                "Cannot make sense of text"), 
+                    options = list(title = "Make a selection"), 
+                    multiple = FALSE),
+        
+        conditionalPanel(
+        condition = "input.classification == 'Another option not in this list'",
+      # other classification input
+        textInput("other", 
+                  "In a few words, describe what the user wants to know:",
+                  value = NA,
+                  width = '600px')
+        ),
+        
+        conditionalPanel(
+        condition = "input.classification != 'Cannot make sense of text' & 
+                     input.classification != ''",
+      # rating confidence
+        pickerInput(inputId = "confidence", 
+                    label = "How confident are you about this selection?", 
+                    choices = c("Not at all confident",
+                                "Not very confident",
+                                "Somewhat confident",
+                                "Very confident"), 
+                    options = list(title = "Make a selection"), 
+                    multiple = FALSE)
+        ),
+      # indicate language
+        pickerInput(inputId = "language", 
+                    label = "Language of message", 
+                    choices = c("Engish", "Spanish", "German", "Not sure"), 
+                    options = list(title = "Make a selection"), 
+                    multiple = FALSE),
+        actionButton("submit", "Submit", width = '200px')
+        )
+      )
+  )
+```
+
+```{r ratings}
+# compile data from inputs
+# -----------------------------------------------------------------------------
+  dat <- reactive({
+    
+  # require certain inputs
+    req(input$classification)
+    
+    if (input$classification == "Another option not in this list") {
+      req(input$other)
+    }
+    
+    if (input$classification != "Cannot make sense of text" &
+        input$classification != "") {
+      req(input$confidence)
+    }
+    
+    req(input$rater)
+    
+    req(input$language)
+    
+  # 
+    dat_ <- data.frame(t(unlist(sapply(vars, function(x) input[[x]]))))
+      dat_ %>%
+        mutate(id = class()$id, 
+               question = class()$question) %>%
+        select(id, question, rater, classification, other, confidence, language) 
+    })
+    
+# submit data
+# -----------------------------------------------------------------------------
+  observeEvent(input$submit, {
+    
+  # update master with data from inputs
+    master$df <- 
+    master$df %>%
+      bind_rows(dat())
+    
+  # save 
+    if (remote==1) {
+      write.csv(master$df, file.path(tempdir(), "master.csv"), row.names = FALSE, 
+                quote = TRUE)
+      drop_upload(file.path(tempdir(), "master.csv"), path = outputDir)
+      
+    } else {
+      write.csv(master$df, file="dash/master.csv", row.names = FALSE, quote = TRUE)
+    }
+    
+  # update counter for eventReactives
+    rv$run2 <- rv$run2 + 1
+    
+  # update SMS question object for display
+    output$textq <- renderText(class()$question)
+    
+  # update inputs
+    updatePickerInput(session, "classification",
+                      label = "Select the best classification", 
+                      choices = c("intent 1", 
+                                  "intent 2", 
+                                  "intent 3", 
+                                  "intent 4", 
+                                  "Another option not in this list",
+                                  "Cannot make sense of text"))
+    
+    updatePickerInput(session, "confidence", 
+                      label = "How confident are you about this selection?", 
+                      choices = c("Not at all confident",
+                                  "Not very confident",
+                                  "Somewhat confident",
+                                  "Very confident"))
+    
+    updateTextInput(session, "other", 
+                    "In a few words, describe what the user wants to know:",
+                    value = NA)
+    
+    updatePickerInput(session, "language", 
+                      label = "Language of message", 
+                      choices = c("Engish", "Spanish", "German", "Not sure"))
+  })
+```
+
+Definitions
+=====================================
+
+```{r}
+  defs <- data.frame(label = c("intent 1", 
+                               "intent 2", 
+                               "intent 3", 
+                               "intent 4"),
+                     definition = c("Insert here",
+                                    "Insert here",
+                                    "Insert here",
+                                    "Insert here"))
+
+  DT::renderDT({
+    datatable(defs)
+  })
+```
+
