@@ -31,7 +31,7 @@ runtime: shiny
 # run once:
   # drop_auth()
   # token <- drop_auth()
-  # saveRDS(token, file = "token.rds")   # updload to server with app
+  # saveRDS(token, file = "droptoken.rds") # updload to server with app
   
   if (remote==1) {
     outputDir <- "dash"                    # output directory on Dropox (toplevel)
@@ -81,25 +81,33 @@ runtime: shiny
 # -----------------------------------------------------------------------------
 # check for items that have agreement between two raters  
   done <- eventReactive(rv$run2, {
-  master$df %>%
-    group_by(id, classification) %>%
-    count() %>%
-    filter(n>1 & !(is.na(classification)))
+    master$df %>%
+      group_by(id, classification) %>%
+      count() %>%
+      filter(n>1 & !(is.na(classification)))
   }, ignoreNULL=FALSE)
   
 # find items that the rater has not rated
   rated <- eventReactive(rv$run2, {
-  master$df %>%
-    group_by(id, rater) %>%
-    filter(rater==input$rater)
+    master$df %>%
+      group_by(id, rater) %>%
+      filter(rater==input$rater)
   }, ignoreNULL=FALSE)
 
 # select an item for the rater
   class <- eventReactive(rv$run2, {
-  master$df %>%
-    filter(!(id %in% done()$id)) %>%
-    filter(!(id %in% rated()$id)) %>%
-    sample_n(1)
+    temp <- 
+    master$df %>%
+      filter(!(id %in% done()$id)) %>%
+      filter(!(id %in% rated()$id))
+      
+  # prevent error message if there are no more messages for this rater
+    validate(need(nrow(temp)!=0, 
+                  "There are no more messages to classify. Nice work!"))
+    
+    temp %>%
+      sample_n(1)
+  
   }, ignoreNULL=FALSE)
 ```
 
